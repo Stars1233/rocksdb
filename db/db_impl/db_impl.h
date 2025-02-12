@@ -535,7 +535,6 @@ class DBImpl : public DB {
       SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
       const TransactionLogIterator::ReadOptions& read_options =
           TransactionLogIterator::ReadOptions()) override;
-  Status DEPRECATED_DeleteFile(std::string name) override;
   Status DeleteFilesInRanges(ColumnFamilyHandle* column_family,
                              const RangePtr* ranges, size_t n,
                              bool include_end = true);
@@ -950,13 +949,6 @@ class DBImpl : public DB {
     return num_running_flushes_;
   }
 
-  // Returns the number of currently running compactions.
-  // REQUIREMENT: mutex_ must be held when calling this function.
-  int num_running_compactions() {
-    mutex_.AssertHeld();
-    return num_running_compactions_;
-  }
-
   const WriteController& write_controller() { return write_controller_; }
 
   // hollow transactions shell used for recovery.
@@ -1092,9 +1084,10 @@ class DBImpl : public DB {
   // This is to be used only by internal rocksdb classes.
   static Status Open(const DBOptions& db_options, const std::string& name,
                      const std::vector<ColumnFamilyDescriptor>& column_families,
-                     std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
-                     const bool seq_per_batch, const bool batch_per_txn,
-                     const bool is_retry, bool* can_retry);
+                     std::vector<ColumnFamilyHandle*>* handles,
+                     std::unique_ptr<DB>* dbptr, const bool seq_per_batch,
+                     const bool batch_per_txn, const bool is_retry,
+                     bool* can_retry);
 
   static IOStatus CreateAndNewDirectory(
       FileSystem* fs, const std::string& dirname,

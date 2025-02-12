@@ -17,7 +17,7 @@
 #include "rocksdb/utilities/secondary_index.h"
 #include "rocksdb/wide_columns.h"
 #include "util/autovector.h"
-#include "util/overload.h"
+#include "utilities/secondary_index/secondary_index_helper.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -181,8 +181,9 @@ class SecondaryIndexMixin : public Txn {
       return updated_column_value_;
     }
     Slice primary_column_value() const {
-      return updated_column_value_.has_value() ? AsSlice(*updated_column_value_)
-                                               : previous_column_value_;
+      return updated_column_value_.has_value()
+                 ? SecondaryIndexHelper::AsSlice(*updated_column_value_)
+                 : previous_column_value_;
     }
 
    private:
@@ -190,18 +191,6 @@ class SecondaryIndexMixin : public Txn {
     Slice previous_column_value_;
     std::optional<std::variant<Slice, std::string>> updated_column_value_;
   };
-
-  static Slice AsSlice(const std::variant<Slice, std::string>& var) {
-    return std::visit([](const auto& value) -> Slice { return value; }, var);
-  }
-
-  static std::string AsString(const std::variant<Slice, std::string>& var) {
-    return std::visit(
-        overload{
-            [](const Slice& value) -> std::string { return value.ToString(); },
-            [](const std::string& value) -> std::string { return value; }},
-        var);
-  }
 
   template <typename Operation>
   Status PerformWithSavePoint(Operation&& operation) {
@@ -243,14 +232,25 @@ class SecondaryIndexMixin : public Txn {
 
     std::variant<Slice, std::string> secondary_key_prefix;
 
-    const Status s = secondary_index->GetSecondaryKeyPrefix(
-        existing_primary_column_value, &secondary_key_prefix);
-    if (!s.ok()) {
-      return s;
+    {
+      const Status s = secondary_index->GetSecondaryKeyPrefix(
+          primary_key, existing_primary_column_value, &secondary_key_prefix);
+      if (!s.ok()) {
+        return s;
+      }
+    }
+
+    {
+      const Status s =
+          secondary_index->FinalizeSecondaryKeyPrefix(&secondary_key_prefix);
+      if (!s.ok()) {
+        return s;
+      }
     }
 
     const std::string secondary_key =
-        AsString(secondary_key_prefix) + primary_key.ToString();
+        SecondaryIndexHelper::AsString(secondary_key_prefix) +
+        primary_key.ToString();
 
     return Txn::SingleDelete(secondary_index->GetSecondaryColumnFamily(),
                              secondary_key);
@@ -286,7 +286,15 @@ class SecondaryIndexMixin : public Txn {
 
     {
       const Status s = secondary_index->GetSecondaryKeyPrefix(
-          primary_column_value, &secondary_key_prefix);
+          primary_key, primary_column_value, &secondary_key_prefix);
+      if (!s.ok()) {
+        return s;
+      }
+    }
+
+    {
+      const Status s =
+          secondary_index->FinalizeSecondaryKeyPrefix(&secondary_key_prefix);
       if (!s.ok()) {
         return s;
       }
@@ -296,7 +304,8 @@ class SecondaryIndexMixin : public Txn {
 
     {
       const Status s = secondary_index->GetSecondaryValue(
-          primary_column_value, previous_column_value, &secondary_value);
+          primary_key, primary_column_value, previous_column_value,
+          &secondary_value);
       if (!s.ok()) {
         return s;
       }
@@ -304,11 +313,14 @@ class SecondaryIndexMixin : public Txn {
 
     {
       const std::string secondary_key =
-          AsString(secondary_key_prefix) + primary_key.ToString();
+          SecondaryIndexHelper::AsString(secondary_key_prefix) +
+          primary_key.ToString();
 
-      const Status s = Txn::Put(
-          secondary_index->GetSecondaryColumnFamily(), secondary_key,
-          secondary_value.has_value() ? AsSlice(*secondary_value) : Slice());
+      const Status s =
+          Txn::Put(secondary_index->GetSecondaryColumnFamily(), secondary_key,
+                   secondary_value.has_value()
+                       ? SecondaryIndexHelper::AsSlice(*secondary_value)
+                       : Slice());
       if (!s.ok()) {
         return s;
       }
